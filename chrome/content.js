@@ -128,8 +128,9 @@ function getLocalDateTimeString() {
     recordModelSnapshots(conversations); // capture current models before any bounce
     return conversations;
   }
+
   // Handle messages from popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Auto-detect organization ID from Claude.ai API
   if (request.action === 'detectOrgId') {
     console.log('Auto-detecting organization ID...');
