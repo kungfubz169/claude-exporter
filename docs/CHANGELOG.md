@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.10.25]
+## [1.11.0]
 
 - Browse page: added "Projects" checkbox in export settings. When enabled, bulk and selected ZIP exports organize conversations into subfolders named after their Claude project (with a `No Project` folder for standalone chats). Works seamlessly with both flat and nested artifact export modes.
 - Browse page: added a dedicated Project filter dropdown populated dynamically with all loaded projects (plus "All Projects" and "No Project"). Selecting a project filters the table to all conversations under that project.
