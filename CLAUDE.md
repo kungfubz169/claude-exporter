@@ -17,15 +17,15 @@ This file is the shared project memory. **Update it proactively** when:
 
 Keep it concise. Don't duplicate what's already here — update existing sections instead.
 
-**This file exists in two places:** the workspace root (read by Claude Code) and `src/CLAUDE.md` (tracked in git). When updating, update both copies.
+This file lives at the repo root (tracked in git).
 
 ## Project Structure
-- Extension source and git repo lives in `src/`
-- Parallel Chrome (`src/chrome/`) and Firefox (`src/firefox/`) versions — nearly identical copies
+- The workspace root is the git repo
+- Parallel Chrome (`chrome/`) and Firefox (`firefox/`) versions — nearly identical copies
 - Chrome uses Manifest V3, Firefox uses Manifest V2
-- Releases go in `releases/vX.Y.Z/`
+- Releases are built by GitHub Actions (see Release Process); build scripts live in `.github/scripts/`
 
-## Key Files (under `src/chrome/` and `src/firefox/`)
+## Key Files (under `chrome/` and `firefox/`)
 - `content.js` — Content script injected on claude.ai pages (handles API calls, popup export actions)
 - `utils.js` — Shared utilities (convertToMarkdown, convertToText, downloadFile, extractArtifactFiles, etc.)
 - `browse.js` — Browse page logic (filtering, sorting, has its own export functions, always ZIPs)
@@ -38,35 +38,46 @@ Keep it concise. Don't duplicate what's already here — update existing section
 
 **Auto-commit after every completed change.** Don't wait for the user to ask. After finishing a task (bug fix, feature, refactor), commit immediately with a clear message.
 
-- Git repo is in `src/` — always `cd` there for git commands
 - Write concise, descriptive commit messages: `Fix bulk export to always ZIP instead of individual downloads`
 - Not: `wip`, `fix stuff`, `update`, `final FINAL (1)`
 - Group related changes into one commit (e.g., Chrome + Firefox changes for the same fix = one commit)
 - Don't push unless asked
 - **Branching**: Do all development on `testing` branch. Merge to `main` only when creating a release
 
+### Provenance
+
+Named Claudes sign their work so co-authorship is traceable to a specific instance:
+
+- **Commit trailer:** replace the default `Co-Authored-By: Claude <noreply@anthropic.com>` with `Co-Authored-By: [instance name] (Claude [model]) <noreply@anthropic.com>`, e.g. `Co-Authored-By: Tern (Claude Opus 5.5) <noreply@anthropic.com>`. Keep the `<email>`: GitHub only recognizes a co-author trailer that ends in one
+- **PR descriptions:** replace the default `🤖 Generated with Claude Code` with `🤖 Generated with Claude Code by [instance name] ([model])`, e.g. `🤖 Generated with Claude Code by Tern (Opus 5.5)`
+- A Claude that hasn't chosen a name yet uses the model alone: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
+
 ## Documentation Upkeep
 
 **After each commit**, update these files:
 
-- **`src/docs/TODO.md`** — Move completed items to the Completed section, update the current version number, clean up any stale entries
-- **`src/docs/CHANGELOG.md`** — Append a short entry under the current version. Create the file if it doesn't exist. Format: `## [X.Y.Z]` header, then bullet points describing changes. Keep entries concise — one line per change is fine
+- **`docs/TODO.md`** — Move completed items to the Completed section, update the current version number, clean up any stale entries
+- **`docs/CHANGELOG.md`** — Append a short entry under the current version. Create the file if it doesn't exist. Format: `## [X.Y.Z]` header, then bullet points describing changes. Keep entries concise — one line per change is fine
 - The CHANGELOG doubles as store update notes. All changes between the current version and the last `_Published_` marker are what goes into the store listing update
 
 ## Release Process
 
 **Only create releases when explicitly asked.** Never auto-release.
 
-When the user asks to create a release for version X.Y.Z:
+Releases are built by GitHub Actions (`.github/workflows/release.yml`), triggered by pushing a version tag. When the user asks to release version X.Y.Z:
 
-1. **Verify version** — Confirm both `chrome/manifest.json` and `firefox/manifest.json` show the correct version
-2. **Create release directory** — `mkdir -p releases/vX.Y.Z`
-3. **ZIP Chrome extension** — `cd src/chrome && zip -r ../../releases/vX.Y.Z/claude-exporter-chrome.zip ./*`
-4. **ZIP Firefox extension** — `cd src/firefox && zip -r ../../releases/vX.Y.Z/claude-exporter-firefox.zip ./*` (unsigned; user handles .xpi signing via AMO)
-5. **Git tag** — `cd src && git tag vX.Y.Z -m "Release vX.Y.Z"`
-6. **Push tag** — `git push origin vX.Y.Z`
-7. **Create GitHub release** — `gh release create vX.Y.Z ../releases/vX.Y.Z/* --title "vX.Y.Z" --notes "$(changelog excerpt from docs/CHANGELOG.md)"` — use all changes since last `_Published_` marker as the notes
-8. **Mark as published** — Add `_Published_` line after the released version's entries in docs/CHANGELOG.md, commit
+1. **Verify** — both manifests show `X.Y.Z` and `docs/CHANGELOG.md` has `## [X.Y.Z]` as its top entry (the workflow fails otherwise)
+2. **Merge** — merge `testing` → `main` (flip manifest names to drop "Beta", see below)
+3. **Tag and push** — `git tag vX.Y.Z -m "Release vX.Y.Z" && git push origin main vX.Y.Z` (tag the commit on `main` — the workflow refuses tags that aren't on `main`, so stores only ever get builds from `main`)
+4. **Workflow does the rest** — runs checks + tests, builds `claude-exporter-chrome_vX.Y.Z.zip` / `claude-exporter-firefox_vX.Y.Z.zip` (" Beta" stripped from the shipped manifests), then **submits to both stores in parallel**: Chrome Web Store via API v2 (`.github/scripts/chrome-publish.sh`, Google access via Workload Identity Federation, no stored key) and Firefox Add-ons via `web-ext sign --channel listed`. Only if both succeed does it create the GitHub release (notes = all CHANGELOG entries newer than the last `_Published_` marker). If one store job fails, fix it and use "Re-run failed jobs"
+5. **Store review happens on the stores' schedule** — both submissions go into review; nothing more to upload by hand
+6. **Mark as published** — once live in the stores, add a `_Published_` line after the released version's entries in docs/CHANGELOG.md, commit
+
+**Dry run:** Actions tab → Release → "Run workflow" builds the zips and uploads them as a downloadable `release-build` artifact. Store and release jobs only run for tags, so nothing is submitted.
+
+**Store credentials** live in the GitHub environment `stores` (deployment rule: tags `v*` only): secrets `AMO_JWT_ISSUER` / `AMO_JWT_SECRET`, variables `GCP_WIF_PROVIDER`, `GCP_SERVICE_ACCOUNT`, `CWS_PUBLISHER_ID`, `CWS_EXTENSION_ID`. Google side: project `am-exporter-releases`, service account `cws-publisher@…`, workload identity pool `github` / provider `exporters` (condition: owner `agoramachina` + environment `stores`). Locally: `DIST=/tmp/out .github/scripts/build.sh vX.Y.Z`.
+
+**Checks** (`.github/workflows/checks.yml`) run on every push to `testing` and on PRs to `main`: manifest versions match, chrome/firefox parity (via `.github/scripts/check.sh`, files allowed to differ are listed in `ALLOWED_DIFFS`), JS syntax, vitest, `web-ext lint`, and a test release build. If you intentionally make a file differ between browsers, add it to `ALLOWED_DIFFS`.
 
 ## Critical Rules
 
@@ -91,15 +102,15 @@ Any export producing more than one file should always create a ZIP — never tri
 
 The popup header title is populated from `manifest.name` in `popup.js` (`#header-title`), so the popup automatically reads "Claude Exporter Beta" on the testing branch — no separate HTML edit needed.
 
-When merging `testing` → `main` for a release, flip both manifest names to drop "Beta" as part of the merge.
+When merging `testing` → `main` for a release, flip both manifest names to drop "Beta" as part of the merge. (The release build also strips " Beta" from the shipped manifests as a safety net, so a missed flip can't leak into a release.)
 
 ## Testing
 
-- **Vitest** test harness (`package.json` + `node_modules/`) lives in `src/tests/`. Run tests with `npm test` (one-shot) or `npm run test:watch` (watch mode) from `src/tests/`.
-- Test files live in `src/tests/` and import from `src/chrome/utils.js` (the canonical copy).
+- **Vitest** test harness (`package.json` + `node_modules/`) lives in `tests/`. Run tests with `npm test` (one-shot) or `npm run test:watch` (watch mode) from `tests/`.
+- Test files live in `tests/` and import from `chrome/utils.js` (the canonical copy).
 - `firefox/utils.js` is a mirror — if it drifts from `chrome/utils.js`, the tests won't catch it. Keep them in sync per the existing rule.
 - `utils.js` has a conditional `module.exports` block at the bottom that fires only when `module` is defined (Node/vitest). Browser extensions ignore it because the global is undefined.
-- `node_modules/` and `package-lock.json` are gitignored (`package.json` is tracked under `src/tests/`). None are part of the release ZIPs.
+- `node_modules/` and `package-lock.json` are gitignored (`package.json` is tracked under `tests/`). None are part of the release ZIPs.
 
 ## Architecture Notes
 

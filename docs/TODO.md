@@ -6,16 +6,10 @@
 
 ### High Priority 🟠
 
-- **Prepare for new model families (e.g. Mythos)**
-  - Source of truth: [Anthropic model IDs and versions docs](https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions)
-  - Current `formatModelName` regex in [chrome/utils.js](../chrome/utils.js) hardcodes family ∈ `{sonnet, opus, haiku}` — anything else (e.g. expected `claude-mythos-preview`) falls through to raw-ID display and gets no badge color
-  - Test coverage now pins this behavior — [tests/utils.test.js](../tests/utils.test.js) "unknown family fallthrough" suite will fail loudly the day Anthropic ships a new family, prompting a regex bump + new badge CSS class
-  - When a new family lands, the change is small:
-    1. Add family to the `(sonnet|opus|haiku)` regex group in `formatModelName`
-    2. Add an `if (model.includes('mythos'))` branch in `getModelBadgeClass`
-    3. Add `.mythos` CSS class with brand color in popup.html, browse.html, content.css
-    4. Add timeline entry to `DEFAULT_MODEL_TIMELINE` once it becomes the default on claude.ai
-  - Note: `-preview` suffix breaks the version-segment regex (expects `\d{1,2}`); needs special-casing or a broader regex if Anthropic stabilizes that naming
+- **Badge colors + timeline for new model families**
+  - Name formatting is family-agnostic since v1.10.22; badges are not — families without a dedicated class render in `--badge-default` (crimson since v1.10.23)
+  - Per family: add a branch in `getModelBadgeClass`, a `--badge-<family>` var in all three theme blocks + `.model-badge.<family>` / `.model-bounced.<family>` in browse.html; add `DEFAULT_MODEL_TIMELINE` entries once it's the claude.ai default
+  - Note: `-preview`-style IDs (non-numeric version) still display raw; special-case if Anthropic ships one on claude.ai
   - Bedrock/Vertex prefixes intentionally out of scope — claude.ai never serves those
 
 - **`DEFAULT_MODEL_TIMELINE` maintenance**
@@ -52,6 +46,21 @@
 
 ### Medium Priority 🟡
 
+- **Backup format v2: descriptive model snapshot field names**
+  - Rename `current` → `currentModel`, `currentAt` → `currentModelSeenAt`, `firstSeen` → `originalModel`, `firstSeenAt` → `originalModelSeenAt` (date pair already renamed to `conversationCreatedAt` / `conversationUpdatedAt` in v1.10.24)
+  - Needs: one-time migration of stored `modelSnapshots`, import accepting both old and new names, `backupVersion: 2`, browse.js `getDisplayModel` reading new names, tests
+  - Downside to note: v2 backups imported into older versions lose model-bounce data (they only read `current` / `firstSeen`)
+
+- **Rewrite the light-mode color theme**
+  - Current light palette is weak; user can't easily test light mode themselves, so verify with screenshots
+  - Likely needs more classes/ids in browse.html / popup.html / options so elements can be styled individually
+  - Badge colors live in `--badge-*` vars across three theme blocks in browse.html
+
+- **Verify automated store uploads on the first real tagged release**
+  - The release workflow now submits to the Chrome Web Store and AMO, but the store jobs have only been tested against stubbed responses
+  - Watch the first tag's run; if a store job fails, fix it and use "Re-run failed jobs"
+  - Follow-ups: pass CHANGELOG notes to AMO (`--amo-metadata`), and optionally attach AMO's signed .xpi to the GitHub release once it's approved
+
 - **Artifact indicators in browse table**
   - Show icon next to conversation name if it contains artifacts
   - Add filter options in funnel dropdown: with artifacts / without artifacts
@@ -61,10 +70,6 @@
   - Filter by artifact filename, type, or whether artifacts exist
   - Helps find specific artifacts across all conversations
 
-- **Contact dev / feedback link**
-  - Add to settings dropdown on browse page
-  - Way for users to reach out (feedback, bug reports)
-  
 - **PDF export for artifacts**
   - Generate PDF versions of artifacts
   - Useful for documentation and sharing
@@ -98,6 +103,7 @@
 
 - **Robust filter**
   - Filter by project, model, artifact
+  - Project filter & export SHIPPED (v1.10.25) — dedicated Project dropdown in browse controls, clickable project links in table, and "Projects" ZIP folder organization option for bulk export. "Search projects" option in the funnel dropdown scopes search bar to project names (v1.10.1). Model + artifact filtering still pending.
 
 - **Advanced settings menu**
   - Verbosity toggle & Debug log
@@ -108,10 +114,12 @@
     - Custom format string (e.g. `%d/%m/%Y %H:%M`)
     - Toggle time display on/off
 
-- **Don't ask for Organization ID if it's empty**
-  - If the user hasn't set this, display "[Auto]" in the id field of the browse settings popup window
-
 ### Low Priority 🟢
+
+- **Consider dropping the manual "Beta" flip on release merges**
+  - `.github/scripts/build.sh` already strips " Beta" from the shipped manifests, so the release zips are correct even if `main` still says "Claude Exporter Beta"
+  - Option: keep "Beta" in source on both branches and remove the flip step from CLAUDE.md's release process (fewer merge-time edits, one less thing to forget)
+  - Keeping the manual flip for now (decided 2026-10-17)
 
 - **True cancellation of in-flight bulk export fetches**
   - Cancel button currently hides the modal immediately, but in-flight batch fetches still run in the background until they finish
@@ -156,6 +164,41 @@
 (none currently open)
 
 ## Completed ✅
+
+- **Project folders ZIP export and project filter in browse page** (v1.10.25)
+  - Added "Projects" checkbox in export settings to organize ZIP exports into subfolders by project
+  - Added Project filter dropdown in browse toolbar and clickable project links in table
+  - Single-project bulk exports tag project name in download filename
+
+- **conversationCreatedAt / conversationUpdatedAt in model snapshot records + backups** (v1.10.24)
+
+- **Fable badge color; crimson default badge** (v1.10.23)
+
+- **Family-agnostic model name formatting** (v1.10.22)
+  - `formatModelName` matches any family by ID shape, so `claude-fable-5-1` → "Claude Fable 5.1"; future families need no code change
+
+- **Automated store uploads in the release workflow** (v1.10.21)
+  - Tag push: build → Chrome Web Store (API v2, Workload Identity Federation, no stored key) + AMO (`web-ext sign`, listed) in parallel → GitHub release only if both succeed
+  - Credentials in the `stores` GitHub environment (tags `v*` only)
+
+- **GitHub Actions release + checks workflows** (v1.10.21)
+  - Tag push (`vX.Y.Z`) builds both zips and creates the GitHub release with CHANGELOG notes; manual run = dry-run artifact
+  - Every push to `testing`: version/parity/syntax checks, vitest, `web-ext lint`, test build
+
+- **Duplicate-title ZIP overwrites + filename sanitizing** (v1.10.21)
+  - Bulk exports no longer drop same-titled conversations (`uniqueFilename()` suffixes `(2)`, `(3)`, …); untitled chats no longer crash browse export; titles sanitized for control chars, trailing dots, length; blob URLs revoked after a delay (Firefox download reliability).
+
+- **Donate links in Options** (v1.10.20)
+  - Added "Buy me a coffee" → [buymeacoffee.com/agoramachina](https://buymeacoffee.com/agoramachina) and "Patreon" → [patreon.com/c/agoramachina](https://www.patreon.com/c/agoramachina) to the Contact & Diagnostics section. Both open in a new tab with `rel="noopener noreferrer"`.
+
+- **Org ID display shows `[Auto]` when not manually set** (v1.10.19)
+  - Browse settings dropdown's org ID field used to show `"Not set"` when no manual org ID was stored, which falsely suggested the user needed to set one. Now reads `[Auto]` and a tooltip clarifies that auto-detection runs on each export. HTML default also updated.
+
+- **Contact & Diagnostics section in Options** (v1.10.3, slimmed v1.10.5)
+  - "Email developer" — mailto with pre-filled subject (`Claude Exporter Bug Report — vX.Y.Z`) and a short body template
+  - "Generate diagnostics" — downloads a sanitized JSON bundle (extension/browser version, counts of stored records, current preferences, `orgIdConfigured` boolean, last 50 captured errors). All UUIDs redacted at capture time. No conversation content.
+  - Each context (popup / browse / content / options) registers `error` + `unhandledrejection` listeners that push to a 50-entry FIFO ring buffer in `chrome.storage.local`
+  - v1.10.5 collapsed the original three buttons into two inline links inside a single sentence (less cluttered, same behavior)
 
 - **Removed redundant "View" button from browse table** (v1.10.9)
   - Chat name in the Name column is already a clickable link to the conversation; the "View" button duplicated that. Removed the button, handler, and `.btn-view` CSS. Narrower Actions column lets table `min-width` drop from 1200px to 1100px.

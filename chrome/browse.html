@@ -28,7 +28,8 @@
       --progress-bg: #e0e0e0;
       --cancel-btn: #dc3545;
       --link-hover: #5d44e8;
-      --badge-default: #1d4ed8;
+      --badge-default: #a81f3d;
+      --badge-fable: #1d4ed8;
       --badge-sonnet: #ce5c04;
       --badge-haiku: #09923b;
       --badge-opus: #7c3aed;
@@ -59,7 +60,8 @@
         --progress-bg: #3a3a3a;
         --cancel-btn: #e74c3c;
         --link-hover: #8b7aff;
-        --badge-default: #7ab8f5;
+        --badge-default: #f0708a;
+        --badge-fable: #7ab8f5;
         --badge-sonnet: #ffaa66;
         --badge-haiku: #66cc66;
         --badge-opus: #c084cc;
@@ -90,7 +92,8 @@
       --progress-bg: #3a3a3a;
       --cancel-btn: #e74c3c;
       --link-hover: #8b7aff;
-      --badge-default: #7ab8f5;
+      --badge-default: #f0708a;
+      --badge-fable: #7ab8f5;
       --badge-sonnet: #ffaa66;
       --badge-haiku: #66cc66;
       --badge-opus: #c084cc;
@@ -109,9 +112,11 @@
       line-height: 1.6;
       /* Keep the table fully visible at all times. When the viewport is
          narrower than this, the PAGE scrolls horizontally instead of the
-         table shrinking or being clipped. 1140 = 1100 (table min-width)
-         + 2 * 20px (.container horizontal padding). */
-      min-width: 1140px;
+         table shrinking or being clipped. 1200 matches .container's
+         min-width so the table's rightmost columns (Actions + Checkbox)
+         never get clipped by the container's padding eating into the
+         available space. */
+      min-width: 1200px;
     }
     
     .header {
@@ -340,6 +345,7 @@
     
     .container {
       max-width: 1600px;
+      min-width: 1200px;
       margin: 20px auto;
       padding: 0 20px;
     }
@@ -429,7 +435,7 @@
     }
     
     td {
-      padding: 15px 20px;
+      padding: 10px 20px;
       font-size: 14px;
     }
     
@@ -471,7 +477,39 @@
       align-items: center;
       gap: 8px;
       flex-grow: 1;
-      max-width: 540px;
+      max-width: 720px;
+    }
+
+    .project-filter-group select {
+      padding: 9px 12px;
+      border: 1px solid var(--input-border);
+      border-radius: 20px;
+      font-size: 13px;
+      background: var(--bg-card);
+      color: var(--text-primary);
+      cursor: pointer;
+      max-width: 170px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition: border-color 0.2s;
+    }
+
+    .project-filter-group select:focus {
+      outline: none;
+      border-color: var(--input-focus);
+    }
+
+    .project-link {
+      color: var(--text-primary);
+      text-decoration: none;
+      cursor: pointer;
+      border-bottom: 1px dotted var(--text-muted);
+      transition: color 0.15s, border-bottom-color 0.15s;
+    }
+
+    .project-link:hover {
+      color: var(--primary-color);
+      border-bottom-color: var(--primary-color);
     }
 
     .search-group .search-box {
@@ -582,6 +620,10 @@
       color: var(--badge-opus);
     }
 
+    .model-badge.fable {
+      color: var(--badge-fable);
+    }
+
     .model-bounced {
       margin-left: 4px;
       font-size: 12px;
@@ -591,6 +633,7 @@
     .model-bounced.sonnet { color: var(--badge-sonnet); }
     .model-bounced.haiku  { color: var(--badge-haiku); }
     .model-bounced.opus   { color: var(--badge-opus); }
+    .model-bounced.fable  { color: var(--badge-fable); }
 
     /* Wrapper that carries the tooltip + cursor so hover works on the badge or asterisk */
     .model-cell {
@@ -762,7 +805,7 @@
             <div class="settings-divider"></div>
             <div class="settings-item" id="settingsOrgId">
               <span class="settings-label">Org ID</span>
-              <span class="settings-value settings-org-id" id="orgIdDisplay" title="">Auto-detected</span>
+              <span class="settings-value settings-org-id" id="orgIdDisplay" title="">[Auto]</span>
             </div>
             <div class="settings-item" id="editOrgId">
               <span class="settings-label">Edit Org ID</span>
@@ -819,6 +862,11 @@
             <div class="filter-option" data-value="projects">Search projects</div>
           </div>
         </div>
+        <div class="filter-group project-filter-group">
+          <select id="projectFilter" title="Filter conversations by project">
+            <option value="">All Projects</option>
+          </select>
+        </div>
       </div>
 
       <div class="export-controls-wrapper">
@@ -847,6 +895,11 @@
               <label title="Add conversation metadata (name, date, model, etc.) at the top of exported files">
                 <input type="checkbox" id="includeMetadata">
                 Metadata
+              </label>
+
+              <label title="Organize exported chats into subfolders by Claude Project inside the ZIP">
+                <input type="checkbox" id="groupByProject">
+                Projects
               </label>
             </div>
 

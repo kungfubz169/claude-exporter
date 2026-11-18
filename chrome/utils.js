@@ -233,7 +233,31 @@ function downloadFile(content, filename, type = 'application/json') {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Revoking synchronously can cancel the download in Firefox
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// Make a conversation title safe to use as a file or folder name
+function sanitizeFilename(name) {
+  const safe = String(name || '')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/, '')
+    .slice(0, 150);
+  return safe || 'Untitled';
+}
+
+// Return a name not already in `used` (and add it), suffixing " (2)", " (3)", ... on collision.
+// `ext` may be empty for folder names. Comparison is case-insensitive (Windows/macOS filesystems).
+function uniqueFilename(base, ext, used) {
+  const suffix = ext ? `.${ext}` : '';
+  let name = `${base}${suffix}`;
+  for (let n = 2; used.has(name.toLowerCase()); n++) {
+    name = `${base} (${n})${suffix}`;
+  }
+  used.add(name.toLowerCase());
+  return name;
 }
 
 // ============================================================================
@@ -640,18 +664,19 @@ function inferModel(conversation) {
 
 // Format a model ID like `claude-sonnet-4-5-20250929` into "Claude Sonnet 4.5".
 // Schema reference: https://platform.claude.com/docs/en/about-claude/models/model-ids-and-versions
-// Handles three documented shapes for the sonnet/opus/haiku families:
+// Handles three documented shapes for any family name (sonnet, opus, haiku, fable, ...):
 //   - Dateless 4.6+:        claude-{name}-{major}-{minor}            (canonical snapshot)
 //   - Dated pre-4.6:        claude-{name}-{major}-{minor}-{YYYYMMDD}
 //   - Convenience alias:    claude-{name}-{major}-{minor}            (resolves to most recent dated snapshot)
-// Unknown families (anything not in `(sonnet|opus|haiku)`) fall through to raw display.
+// The family is matched by shape (`[a-z]+`), not a whitelist, so new families format without code changes.
+// Anything that doesn't fit either shape falls through to raw display.
 function formatModelName(model) {
   if (!model || !model.startsWith('claude-')) {
     return model || 'Unknown';
   }
 
   // New format: claude-{type}-{major}[-{minor}][-{date}]
-  const newFormatMatch = model.match(/^claude-(sonnet|opus|haiku)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i);
+  const newFormatMatch = model.match(/^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i);
   if (newFormatMatch) {
     const [, modelType, major, minor] = newFormatMatch;
     const modelName = modelType.charAt(0).toUpperCase() + modelType.slice(1);
@@ -660,7 +685,7 @@ function formatModelName(model) {
   }
 
   // Old format: claude-{major}[-{minor}]-{type}-{date}
-  const oldFormatMatch = model.match(/^claude-(\d+)(?:-(\d+))?-(sonnet|opus|haiku)-\d{8}$/i);
+  const oldFormatMatch = model.match(/^claude-(\d+)(?:-(\d+))?-([a-z]+)-\d{8}$/i);
   if (oldFormatMatch) {
     const [, major, minor, modelType] = oldFormatMatch;
     const modelName = modelType.charAt(0).toUpperCase() + modelType.slice(1);
@@ -677,10 +702,23 @@ function getModelBadgeClass(model) {
   if (model.includes('sonnet')) return 'sonnet';
   if (model.includes('opus')) return 'opus';
   if (model.includes('haiku')) return 'haiku';
+  if (model.includes('fable')) return 'fable';
   return '';
 }
 
 // ----- Extension data backup / restore -----
+
+// Put conversationCreatedAt / conversationUpdatedAt first in each model snapshot
+// record. Chrome storage returns object keys alphabetically, so order is fixed at
+// export time.
+function orderSnapshotKeys(snapshots) {
+  const ordered = {};
+  for (const [id, record] of Object.entries(snapshots || {})) {
+    const { conversationCreatedAt, conversationUpdatedAt, ...rest } = record || {};
+    ordered[id] = { conversationCreatedAt, conversationUpdatedAt, ...rest };
+  }
+  return ordered;
+}
 
 // Download all extension storage (local + sync) as a structured JSON file.
 // onComplete(success, message) reports the result so each caller can show it
@@ -688,6 +726,8 @@ function getModelBadgeClass(model) {
 function backupExtensionData(onComplete) {
   chrome.storage.local.get(null, (local) => {
     chrome.storage.sync.get(null, (sync) => {
+      const localData = { ...(local || {}) };
+      if (localData.modelSnapshots) localData.modelSnapshots = orderSnapshotKeys(localData.modelSnapshots);
       const backup = {
         _meta: {
           app: 'claude-exporter',
@@ -695,7 +735,7 @@ function backupExtensionData(onComplete) {
           extensionVersion: chrome.runtime.getManifest().version,
           createdAt: new Date().toISOString()
         },
-        local: local || {},
+        local: localData,
         sync: sync || {}
       };
       const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
@@ -709,7 +749,7 @@ function backupExtensionData(onComplete) {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
       const snapCount = Object.keys(backup.local.modelSnapshots || {}).length;
       const exportCount = Object.keys(backup.local.exportTimestamps || {}).length;
       if (onComplete) onComplete(true, `Backup exported — ${snapCount} model snapshot(s), ${exportCount} export record(s).`);
@@ -1028,7 +1068,7 @@ function generateDiagnostics(onComplete) {
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
 
         if (onComplete) {
           onComplete(true, `Diagnostics downloaded — ${errorLog.length} error(s) captured, all IDs redacted.`);
@@ -1046,6 +1086,8 @@ if (typeof module !== 'undefined' && module.exports) {
     convertToMarkdown,
     convertToText,
     downloadFile,
+    sanitizeFilename,
+    uniqueFilename,
     extractArtifactsFromMessage,
     extractArtifactsFromText,
     extractArtifacts,
@@ -1058,6 +1100,7 @@ if (typeof module !== 'undefined' && module.exports) {
     formatModelName,
     getModelBadgeClass,
     backupExtensionData,
+    orderSnapshotKeys,
     importBackup,
     mergeStorageData,
     sanitizeForDiagnostics,

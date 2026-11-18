@@ -34,6 +34,7 @@ function recordExportTimestamps(conversationIds) {
 // Snapshot each conversation's current model so it survives a model bounce
 // (e.g. when a model retires and Claude silently moves old chats onto a new
 // one). Only the raw API model is recorded — never an inferred guess.
+// Also keeps conversationCreatedAt / conversationUpdatedAt in sync with the API.
 function recordModelSnapshots(conversations) {
   if (!Array.isArray(conversations)) return;
   chrome.storage.local.get(['modelSnapshots'], (result) => {
@@ -47,6 +48,8 @@ function recordModelSnapshots(conversations) {
       const existing = snapshots[id];
       if (!existing) {
         snapshots[id] = {
+          conversationCreatedAt: conv.created_at,
+          conversationUpdatedAt: conv.updated_at,
           firstSeen: model,
           firstSeenAt: now,
           current: model,
@@ -59,6 +62,14 @@ function recordModelSnapshots(conversations) {
         existing.currentAt = now;
         existing.history = existing.history || [];
         existing.history.push({ model, at: now });
+        changed = true;
+      }
+      if (existing && conv.created_at && existing.conversationCreatedAt !== conv.created_at) {
+        existing.conversationCreatedAt = conv.created_at;
+        changed = true;
+      }
+      if (existing && conv.updated_at && existing.conversationUpdatedAt !== conv.updated_at) {
+        existing.conversationUpdatedAt = conv.updated_at;
         changed = true;
       }
     }
@@ -117,8 +128,9 @@ function getLocalDateTimeString() {
     recordModelSnapshots(conversations); // capture current models before any bounce
     return conversations;
   }
+
   // Handle messages from popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // Auto-detect organization ID from Claude.ai API
   if (request.action === 'detectOrgId') {
     console.log('Auto-detecting organization ID...');
@@ -168,6 +180,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Infer model if null
         data.model = inferModel(data);
+        const safeName = sanitizeFilename(data.name || request.conversationId);
         
         // Check if we need to extract artifacts to separate files
         if (request.extractArtifacts || request.flattenArtifacts) {
@@ -184,15 +197,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               switch (request.format) {
                 case 'markdown':
                   conversationContent = convertToMarkdown(data, request.includeMetadata, request.conversationId, request.includeArtifacts, request.includeThinking);
-                  conversationFilename = `${data.name || request.conversationId}.md`;
+                  conversationFilename = `${safeName}.md`;
                   break;
                 case 'text':
                   conversationContent = convertToText(data, request.includeMetadata, request.includeArtifacts, request.includeThinking);
-                  conversationFilename = `${data.name || request.conversationId}.txt`;
+                  conversationFilename = `${safeName}.txt`;
                   break;
                 default:
                   conversationContent = JSON.stringify(data, null, 2);
-                  conversationFilename = `${data.name || request.conversationId}.json`;
+                  conversationFilename = `${safeName}.json`;
               }
 
               // Flat export: add to Chats folder
@@ -218,7 +231,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (request.flattenArtifacts && !request.extractArtifacts) {
               const artifactsFolder = zip.folder('Artifacts');
               for (const artifact of artifactFiles) {
-                const filename = `${data.name || request.conversationId}_${artifact.filename}`;
+                const filename = `${safeName}_${artifact.filename}`;
                 artifactsFolder.file(filename, artifact.content);
               }
             }
@@ -228,11 +241,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a');
               a.href = url;
-              a.download = `${data.name || request.conversationId}.zip`;
+              a.download = `${safeName}.zip`;
               document.body.appendChild(a);
               a.click();
               document.body.removeChild(a);
-              URL.revokeObjectURL(url);
+              setTimeout(() => URL.revokeObjectURL(url), 10000);
             });
 
             console.log(`Downloading ZIP with conversation and ${artifactFiles.length} artifact(s)`);
@@ -244,17 +257,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             switch (request.format) {
               case 'markdown':
                 content = convertToMarkdown(data, request.includeMetadata, request.conversationId, request.includeArtifacts, request.includeThinking);
-                filename = `${data.name || request.conversationId}.md`;
+                filename = `${safeName}.md`;
                 type = 'text/markdown';
                 break;
               case 'text':
                 content = convertToText(data, request.includeMetadata, request.includeArtifacts, request.includeThinking);
-                filename = `${data.name || request.conversationId}.txt`;
+                filename = `${safeName}.txt`;
                 type = 'text/plain';
                 break;
               default:
                 content = JSON.stringify(data, null, 2);
-                filename = `${data.name || request.conversationId}.json`;
+                filename = `${safeName}.json`;
                 type = 'application/json';
             }
             console.log('No artifacts found. Downloading file:', filename);
@@ -276,17 +289,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             switch (request.format) {
               case 'markdown':
                 content = convertToMarkdown(data, request.includeMetadata, request.conversationId, request.includeArtifacts, request.includeThinking);
-                filename = `${data.name || request.conversationId}.md`;
+                filename = `${safeName}.md`;
                 type = 'text/markdown';
                 break;
               case 'text':
                 content = convertToText(data, request.includeMetadata, request.includeArtifacts, request.includeThinking);
-                filename = `${data.name || request.conversationId}.txt`;
+                filename = `${safeName}.txt`;
                 type = 'text/plain';
                 break;
               default:
                 content = JSON.stringify(data, null, 2);
-                filename = `${data.name || request.conversationId}.json`;
+                filename = `${safeName}.json`;
                 type = 'application/json';
             }
 
@@ -319,6 +332,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.extractArtifacts || request.flattenArtifacts) {
           // When extracting artifacts (nested or flat), always create a ZIP
           const zip = new JSZip();
+          const usedNames = new Set();
           let processed = 0;
           let included = 0;
           let errors = [];
@@ -344,7 +358,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               }
 
               // Sanitize folder name
-              const folderName = (conv.name || conv.uuid).replace(/[<>:"/\\|?*]/g, '_');
+              const folderName = uniqueFilename(sanitizeFilename(conv.name || conv.uuid), '', usedNames);
 
               // Generate conversation content
               let conversationContent, conversationFilename;
@@ -418,7 +432,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
           });
 
           // Record export timestamps for all successfully exported conversations
@@ -438,6 +452,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         } else {
           // For other formats without artifact extraction, create a ZIP
           const zip = new JSZip();
+          const usedNames = new Set();
           let count = 0;
           let errors = [];
 
@@ -450,7 +465,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               fullConv.model = inferModel(fullConv);
 
               let content, filename;
-              const safeName = (conv.name || conv.uuid).replace(/[<>:"/\\|?*]/g, '_');
+              const safeName = uniqueFilename(sanitizeFilename(conv.name || conv.uuid), '', usedNames);
 
               if (request.format === 'markdown') {
                 content = convertToMarkdown(fullConv, request.includeMetadata, conv.uuid, request.includeArtifacts, request.includeThinking);
@@ -484,7 +499,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
           });
 
           // Record export timestamps for successfully exported conversations

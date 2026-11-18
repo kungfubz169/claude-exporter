@@ -12,6 +12,9 @@ const {
   formatModelName,
   getModelBadgeClass,
   DEFAULT_MODEL_TIMELINE,
+  sanitizeFilename,
+  uniqueFilename,
+  orderSnapshotKeys,
 } = utils;
 
 // Regression coverage for the bug fixed in v1.9.1: bash/web_search/repl
@@ -364,6 +367,12 @@ describe('formatModelName — edge cases', () => {
     expect(formatModelName('gpt-4')).toBe('gpt-4');
   });
 
+  it('formats families beyond sonnet/opus/haiku (e.g. fable)', () => {
+    expect(formatModelName('claude-fable-5')).toBe('Claude Fable 5');
+    expect(formatModelName('claude-fable-5-1')).toBe('Claude Fable 5.1');
+    expect(formatModelName('claude-opus-5-5')).toBe('Claude Opus 5.5');
+  });
+
   it('returns input unchanged when claude- prefix but unparseable', () => {
     expect(formatModelName('claude-nonsense')).toBe('claude-nonsense');
   });
@@ -408,21 +417,21 @@ describe('formatModelName — minor-version regex boundary (\\d{1,2})', () => {
   });
 });
 
-// Documented behavior for unknown families (e.g. a hypothetical future "Mythos").
-// Current regex hardcodes `(sonnet|opus|haiku)` — anything else falls through to
-// raw display. These tests pin that behavior so the day Anthropic ships a new
-// family, we get a heads-up via test failure rather than ugly UI.
-describe('formatModelName — unknown family fallthrough', () => {
+// New families (e.g. a hypothetical future "Mythos") are matched by ID shape, not a
+// whitelist, so they format without code changes. IDs that don't fit the shape
+// (non-numeric version) still fall through to raw display.
+describe('formatModelName — unseen future families', () => {
   it('returns raw ID for new family with non-numeric version (e.g. -preview)', () => {
     expect(formatModelName('claude-mythos-preview')).toBe('claude-mythos-preview');
   });
 
-  it('returns raw ID for new family with numeric version', () => {
-    expect(formatModelName('claude-mythos-1-0')).toBe('claude-mythos-1-0');
+  it('formats new family with numeric version', () => {
+    expect(formatModelName('claude-mythos-1-0')).toBe('Claude Mythos 1.0');
   });
 
-  it('returns raw ID for new family with dated version', () => {
-    expect(formatModelName('claude-mythos-1-0-20260101')).toBe('claude-mythos-1-0-20260101');
+  it('formats new family with dated version', () => {
+    expect(formatModelName('claude-mythos-1-0-20260101')).toBe('Claude Mythos 1.0');
+    expect(formatModelName('claude-mythos-7-20270101')).toBe('Claude Mythos 7');
   });
 });
 
@@ -488,6 +497,7 @@ describe('getModelBadgeClass', () => {
     expect(getModelBadgeClass('claude-sonnet-4-5-20250929')).toBe('sonnet');
     expect(getModelBadgeClass('claude-opus-4-7')).toBe('opus');
     expect(getModelBadgeClass('claude-haiku-3-5')).toBe('haiku');
+    expect(getModelBadgeClass('claude-fable-5-1')).toBe('fable');
   });
 
   it('returns empty string for unknown family', () => {
@@ -552,5 +562,91 @@ describe('convertToMarkdown — smoke test', () => {
     };
     const md = convertToMarkdown(data, true);
     expect(md).toContain('My Chat');
+  });
+});
+
+// Regression coverage for v1.10.21: bulk ZIP exports silently overwrote
+// conversations that shared a title (zip.file() replaces same-named entries),
+// and null/empty titles produced crashes or bare ".md" files.
+describe('sanitizeFilename', () => {
+  it('replaces filesystem-reserved characters', () => {
+    expect(sanitizeFilename('A/B: testing?')).toBe('A_B_ testing_');
+  });
+
+  it('replaces control characters and collapses whitespace', () => {
+    expect(sanitizeFilename('line\nbreak\ttab')).toBe('line_break_tab');
+    expect(sanitizeFilename('  lots   of   space  ')).toBe('lots of space');
+  });
+
+  it('strips trailing dots and spaces (invalid on Windows)', () => {
+    expect(sanitizeFilename('trailing...  ')).toBe('trailing');
+  });
+
+  it('falls back to "Untitled" for null, empty, or whitespace-only names', () => {
+    expect(sanitizeFilename(null)).toBe('Untitled');
+    expect(sanitizeFilename('')).toBe('Untitled');
+    expect(sanitizeFilename('   ')).toBe('Untitled');
+  });
+
+  it('caps length at 150 characters', () => {
+    expect(sanitizeFilename('x'.repeat(300))).toHaveLength(150);
+  });
+});
+
+describe('uniqueFilename', () => {
+  it('suffixes duplicates with (2), (3), ...', () => {
+    const used = new Set();
+    expect(uniqueFilename('New chat', 'md', used)).toBe('New chat.md');
+    expect(uniqueFilename('New chat', 'md', used)).toBe('New chat (2).md');
+    expect(uniqueFilename('New chat', 'md', used)).toBe('New chat (3).md');
+  });
+
+  it('treats names case-insensitively', () => {
+    const used = new Set();
+    uniqueFilename('Notes', 'md', used);
+    expect(uniqueFilename('notes', 'md', used)).toBe('notes (2).md');
+  });
+
+  it('supports extensionless folder names', () => {
+    const used = new Set();
+    expect(uniqueFilename('Project', '', used)).toBe('Project');
+    expect(uniqueFilename('Project', '', used)).toBe('Project (2)');
+  });
+
+  it('does not collide with a real title that looks like a suffix', () => {
+    const used = new Set();
+    uniqueFilename('Chat', '', used);
+    uniqueFilename('Chat', '', used); // -> "Chat (2)"
+    expect(uniqueFilename('Chat (2)', '', used)).toBe('Chat (2) (2)');
+  });
+});
+
+describe('orderSnapshotKeys', () => {
+  it('puts conversationCreatedAt and conversationUpdatedAt before the stored (alphabetical) keys', () => {
+    const stored = {
+      abc: {
+        current: 'claude-sonnet-4-5-20250929',
+        currentAt: '2026-10-17T09:29:06.978Z',
+        firstSeen: 'claude-sonnet-4-5-20250929',
+        firstSeenAt: '2026-10-17T09:29:06.978Z',
+        history: [],
+        conversationUpdatedAt: '2026-10-20T00:00:00Z',
+        conversationCreatedAt: '2026-10-01T00:00:00Z',
+      },
+    };
+    expect(Object.keys(orderSnapshotKeys(stored).abc)).toEqual([
+      'conversationCreatedAt', 'conversationUpdatedAt', 'current', 'currentAt', 'firstSeen', 'firstSeenAt', 'history',
+    ]);
+  });
+
+  it('leaves old records without dates intact once serialized', () => {
+    const old = { abc: { current: 'claude-opus-4-7', firstSeen: 'claude-opus-4-7' } };
+    const roundTripped = JSON.parse(JSON.stringify(orderSnapshotKeys(old)));
+    expect(roundTripped).toEqual(old);
+  });
+
+  it('handles empty or missing input', () => {
+    expect(orderSnapshotKeys({})).toEqual({});
+    expect(orderSnapshotKeys(undefined)).toEqual({});
   });
 });

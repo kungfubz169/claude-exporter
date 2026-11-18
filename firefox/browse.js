@@ -253,10 +253,48 @@ async function loadProjects() {
       projectsMap[projectId] = projectName;
     });
 
+    populateProjectFilter(projects);
+
     return projects;
   } catch (error) {
     console.warn('Error loading projects:', error);
     return [];
+  }
+}
+
+// Populate project filter dropdown
+function populateProjectFilter(projects) {
+  const projectFilter = document.getElementById('projectFilter');
+  if (!projectFilter) return;
+
+  const currentValue = projectFilter.value;
+  projectFilter.innerHTML = '<option value="">All Projects</option>';
+
+  if (!projects || projects.length === 0) {
+    return;
+  }
+
+  // Sort projects alphabetically by name
+  const sortedProjects = [...projects].sort((a, b) => {
+    const nameA = (a.name || a.title || 'Untitled Project').toLowerCase();
+    const nameB = (b.name || b.title || 'Untitled Project').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
+  sortedProjects.forEach(project => {
+    const option = document.createElement('option');
+    option.value = project.uuid || project.id;
+    option.textContent = project.name || project.title || 'Untitled Project';
+    projectFilter.appendChild(option);
+  });
+
+  const noProjectOption = document.createElement('option');
+  noProjectOption.value = '_none_';
+  noProjectOption.textContent = 'No Project';
+  projectFilter.appendChild(noProjectOption);
+
+  if (currentValue) {
+    projectFilter.value = currentValue;
   }
 }
 
@@ -302,9 +340,20 @@ function getProjectName(conversation) {
 // Apply filters and sorting
 function applyFiltersAndSort() {
   const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+  const projectFilterValue = document.getElementById('projectFilter')?.value || '';
 
   // Filter conversations
   filteredConversations = allConversations.filter(conv => {
+    // Project filter check
+    if (projectFilterValue) {
+      const convProjId = conv.project_uuid || conv.project_id || conv.projectUuid;
+      if (projectFilterValue === '_none_') {
+        if (convProjId) return false;
+      } else {
+        if (convProjId !== projectFilterValue) return false;
+      }
+    }
+
     // 'projects' mode: search scope becomes the project name, status filters do not apply
     if (statusFilter === 'projects') {
       if (!searchTerm) return true;
@@ -458,6 +507,7 @@ function displayConversations() {
     const modelInfo = getDisplayModel(conv);
     const modelBadgeClass = getModelBadgeClass(modelInfo.model);
     const projectName = getProjectName(conv);
+    const projectId = conv.project_uuid || conv.project_id || conv.projectUuid;
 
     const newUpdated = isNewOrUpdated(conv);
     html += `
@@ -470,7 +520,10 @@ function displayConversations() {
             </a>
           </div>
         </td>
-        <td>${escapeHtml(projectName)}</td>
+        <td>${projectName !== '-' && projectId
+          ? `<a href="#" class="project-link" data-project-id="${escapeHtml(projectId)}" title="Filter by this project">${escapeHtml(projectName)}</a>`
+          : escapeHtml(projectName)
+        }</td>
         <td class="date">${escapeHtml(updatedDate)}<br><span class="time">${escapeHtml(updatedTime)}</span></td>
         <td class="date">${escapeHtml(createdDate)}<br><span class="time">${escapeHtml(createdTime)}</span></td>
         <td>
@@ -509,6 +562,19 @@ function displayConversations() {
     });
   });
   
+  // Add project link click listeners
+  document.querySelectorAll('.project-link').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const projId = e.currentTarget.dataset.projectId;
+      const projectFilter = document.getElementById('projectFilter');
+      if (projectFilter && projId) {
+        projectFilter.value = projId;
+        applyFiltersAndSort();
+      }
+    });
+  });
+
   // Add checkbox listeners (use 'click' instead of 'change' to capture shift key)
   document.querySelectorAll('.conversation-checkbox').forEach(checkbox => {
     checkbox.addEventListener('click', handleCheckboxChange);
@@ -651,6 +717,7 @@ async function exportConversation(conversationId, conversationName) {
   const extractArtifacts = document.getElementById('extractArtifacts').checked;
   const artifactFormat = document.getElementById('artifactFormat').value;
   const flattenArtifacts = document.getElementById('flattenArtifacts').checked;
+  const groupByProject = document.getElementById('groupByProject')?.checked;
 
   // Tracked at function scope so the unified post-save toast can mention it
   let artifactCount = 0;
@@ -676,6 +743,12 @@ async function exportConversation(conversationId, conversationName) {
 
     // Infer model if null
     data.model = inferModel(data);
+    const safeName = sanitizeFilename(conversationName || conversationId);
+
+    const conv = allConversations.find(c => c.uuid === conversationId);
+    const projectName = conv ? getProjectName(conv) : '-';
+    const hasProject = projectName && projectName !== '-';
+    const projectFolderName = hasProject ? sanitizeFilename(projectName) : 'No Project';
 
     // Check if we need to extract artifacts to separate files
     if (extractArtifacts || flattenArtifacts) {
@@ -685,6 +758,7 @@ async function exportConversation(conversationId, conversationName) {
         artifactCount = artifactFiles.length;
         // Create a ZIP with artifacts (and optionally conversation)
         const zip = new JSZip();
+        const targetBase = groupByProject ? zip.folder(projectFolderName) : zip;
 
         // Add conversation file only if includeChats is true
         if (includeChats !== false) {
@@ -692,31 +766,31 @@ async function exportConversation(conversationId, conversationName) {
           switch (format) {
             case 'markdown':
               conversationContent = convertToMarkdown(data, includeMetadata, conversationId, includeArtifacts, includeThinking);
-              conversationFilename = `${conversationName || conversationId}.md`;
+              conversationFilename = `${safeName}.md`;
               break;
             case 'text':
               conversationContent = convertToText(data, includeMetadata, includeArtifacts, includeThinking);
-              conversationFilename = `${conversationName || conversationId}.txt`;
+              conversationFilename = `${safeName}.txt`;
               break;
             default:
               conversationContent = JSON.stringify(data, null, 2);
-              conversationFilename = `${conversationName || conversationId}.json`;
+              conversationFilename = `${safeName}.json`;
           }
 
           // Flat export: add to Chats folder
           if (flattenArtifacts && !extractArtifacts) {
-            const chatsFolder = zip.folder('Chats');
+            const chatsFolder = targetBase.folder('Chats');
             chatsFolder.file(conversationFilename, conversationContent);
           } else {
-            // Nested or no artifact extraction: add to root
-            zip.file(conversationFilename, conversationContent);
+            // Nested or no artifact extraction: add to targetBase
+            targetBase.file(conversationFilename, conversationContent);
           }
         }
 
         // Add artifact files
         // Nested: create artifacts subfolder
         if (extractArtifacts) {
-          const artifactsFolder = includeChats !== false ? zip.folder('artifacts') : zip;
+          const artifactsFolder = includeChats !== false ? targetBase.folder('artifacts') : targetBase;
           for (const artifact of artifactFiles) {
             artifactsFolder.file(artifact.filename, artifact.content);
           }
@@ -724,9 +798,9 @@ async function exportConversation(conversationId, conversationName) {
 
         // Flat: add artifacts with conversation name prefix to Artifacts folder
         if (flattenArtifacts && !extractArtifacts) {
-          const artifactsFolder = zip.folder('Artifacts');
+          const artifactsFolder = targetBase.folder('Artifacts');
           for (const artifact of artifactFiles) {
-            const filename = `${conversationName}_${artifact.filename}`;
+            const filename = `${safeName}_${artifact.filename}`;
             artifactsFolder.file(filename, artifact.content);
           }
         }
@@ -736,11 +810,11 @@ async function exportConversation(conversationId, conversationName) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${conversationName || conversationId}.zip`;
+        a.download = `${safeName}.zip`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
 
         // Toast handled below after timestamp save
       } else {
@@ -749,20 +823,37 @@ async function exportConversation(conversationId, conversationName) {
         switch (format) {
           case 'markdown':
             content = convertToMarkdown(data, includeMetadata, conversationId, includeArtifacts, includeThinking);
-            filename = `${conversationName || conversationId}.md`;
+            filename = `${safeName}.md`;
             type = 'text/markdown';
             break;
           case 'text':
             content = convertToText(data, includeMetadata, includeArtifacts, includeThinking);
-            filename = `${conversationName || conversationId}.txt`;
+            filename = `${safeName}.txt`;
             type = 'text/plain';
             break;
           default:
             content = JSON.stringify(data, null, 2);
-            filename = `${conversationName || conversationId}.json`;
+            filename = `${safeName}.json`;
             type = 'application/json';
         }
-        downloadFile(content, filename, type);
+
+        if (groupByProject) {
+          const zip = new JSZip();
+          const projectFolder = zip.folder(projectFolderName);
+          projectFolder.file(filename, content);
+
+          const blob = await zip.generateAsync({ type: 'blob' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${safeName}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } else {
+          downloadFile(content, filename, type);
+        }
       }
     } else {
       // Normal export without artifact extraction
@@ -770,22 +861,51 @@ async function exportConversation(conversationId, conversationName) {
         // If chats are disabled and we're not extracting artifacts, there's nothing to export
         showToast('Nothing to export. Enable "Chats" or "Artifacts nested".', true);
         return;
+      } else if (groupByProject) {
+        let content, filename;
+        switch (format) {
+          case 'markdown':
+            content = convertToMarkdown(data, includeMetadata, conversationId, includeArtifacts, includeThinking);
+            filename = `${safeName}.md`;
+            break;
+          case 'text':
+            content = convertToText(data, includeMetadata, includeArtifacts, includeThinking);
+            filename = `${safeName}.txt`;
+            break;
+          default:
+            content = JSON.stringify(data, null, 2);
+            filename = `${safeName}.json`;
+        }
+
+        const zip = new JSZip();
+        const projectFolder = zip.folder(projectFolderName);
+        projectFolder.file(filename, content);
+
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${safeName}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
       } else {
         let content, filename, type;
         switch (format) {
           case 'markdown':
             content = convertToMarkdown(data, includeMetadata, conversationId, includeArtifacts, includeThinking);
-            filename = `${conversationName || conversationId}.md`;
+            filename = `${safeName}.md`;
             type = 'text/markdown';
             break;
           case 'text':
             content = convertToText(data, includeMetadata, includeArtifacts, includeThinking);
-            filename = `${conversationName || conversationId}.txt`;
+            filename = `${safeName}.txt`;
             type = 'text/plain';
             break;
           default:
             content = JSON.stringify(data, null, 2);
-            filename = `${conversationName || conversationId}.json`;
+            filename = `${safeName}.json`;
             type = 'application/json';
         }
         downloadFile(content, filename, type);
@@ -816,6 +936,7 @@ async function exportAllFiltered() {
   const extractArtifacts = document.getElementById('extractArtifacts').checked;
   const artifactFormat = document.getElementById('artifactFormat').value;
   const flattenArtifacts = document.getElementById('flattenArtifacts').checked;
+  const groupByProject = document.getElementById('groupByProject')?.checked;
 
   const button = document.getElementById('exportAllBtn');
   button.disabled = true;
@@ -836,8 +957,9 @@ async function exportAllFiltered() {
   }
 
   // Single conversation: delegate to exportConversation so we skip the ZIP
-  // when the output is a single file (artifact-extraction paths still ZIP there)
-  if (conversationsToExport.length === 1) {
+  // when the output is a single file (artifact-extraction paths still ZIP there).
+  // If groupByProject is enabled, always ZIP so the project folder is preserved.
+  if (conversationsToExport.length === 1 && !groupByProject) {
     const conv = conversationsToExport[0];
     const progressModal = document.getElementById('progressModal');
     const progressBar = document.getElementById('progressBar');
@@ -879,6 +1001,7 @@ async function exportAllFiltered() {
   try {
     // Create a new ZIP file
     const zip = new JSZip();
+    const usedNamesByFolder = new Map();
     const total = conversationsToExport.length;
     let completed = 0;
     let failed = 0;
@@ -925,7 +1048,16 @@ async function exportAllFiltered() {
 
           // Generate filename and content based on format
           let content, filename;
-          const safeName = conv.name.replace(/[<>:"/\\|?*]/g, '_'); // Remove invalid filename characters
+          const projectName = getProjectName(conv);
+          const hasProject = projectName && projectName !== '-';
+          const projectFolderName = hasProject ? sanitizeFilename(projectName) : 'No Project';
+
+          const folderKey = groupByProject ? projectFolderName : '';
+          if (!usedNamesByFolder.has(folderKey)) {
+            usedNamesByFolder.set(folderKey, new Set());
+          }
+          const folderUsedNames = usedNamesByFolder.get(folderKey);
+          const safeName = uniqueFilename(sanitizeFilename(conv.name || conv.uuid), '', folderUsedNames);
 
           switch (format) {
             case 'markdown':
@@ -941,17 +1073,20 @@ async function exportAllFiltered() {
               filename = `${safeName}.json`;
           }
 
+          // Target folder inside ZIP
+          const targetBase = groupByProject ? zip.folder(projectFolderName) : zip;
+
           // Flat export: use Chats and Artifacts top-level folders
           if (flattenArtifacts && !extractArtifacts) {
             // Add chat file to Chats folder if chats are enabled
             if (includeChats !== false) {
-              const chatsFolder = zip.folder('Chats');
+              const chatsFolder = targetBase.folder('Chats');
               chatsFolder.file(filename, content);
             }
 
             // Add artifacts to Artifacts folder with conversation name prefix
             if (artifactFiles.length > 0) {
-              const artifactsFolder = zip.folder('Artifacts');
+              const artifactsFolder = targetBase.folder('Artifacts');
               for (const artifact of artifactFiles) {
                 const artifactFilename = `${safeName}_${artifact.filename}`;
                 artifactsFolder.file(artifactFilename, artifact.content);
@@ -960,7 +1095,7 @@ async function exportAllFiltered() {
           }
           // Nested export: create per-conversation folders with artifacts subfolder
           else if (extractArtifacts) {
-            const convFolder = zip.folder(safeName);
+            const convFolder = targetBase.folder(safeName);
 
             // Add conversation file only if includeChats is true
             if (includeChats !== false) {
@@ -975,9 +1110,9 @@ async function exportAllFiltered() {
               }
             }
           } else {
-            // No artifact extraction - add file to ZIP root only if chats are enabled
+            // No artifact extraction - add file to ZIP target folder only if chats are enabled
             if (includeChats !== false) {
-              zip.file(filename, content);
+              targetBase.file(filename, content);
             }
           }
 
@@ -1028,11 +1163,30 @@ async function exportAllFiltered() {
     const datetime = getLocalDateTimeString();
     // Use 'claude-artifacts' when ONLY flat artifacts are exported
     const prefix = (flattenArtifacts && !extractArtifacts && includeChats === false) ? 'claude-artifacts' : 'claude-exports';
-    a.download = `${prefix}-${datetime}.zip`;
+
+    // Tag ZIP name with project name if all exported conversations belong to the same project
+    let projectTag = '';
+    const projectFilterValue = document.getElementById('projectFilter')?.value;
+    if (projectFilterValue && projectFilterValue !== '_none_' && projectsMap[projectFilterValue]) {
+      projectTag = `-${sanitizeFilename(projectsMap[projectFilterValue])}`;
+    } else if (conversationsToExport.length > 0) {
+      const firstProjId = conversationsToExport[0].project_uuid || conversationsToExport[0].project_id || conversationsToExport[0].projectUuid;
+      if (firstProjId && projectsMap[firstProjId]) {
+        const allSameProject = conversationsToExport.every(c => {
+          const pid = c.project_uuid || c.project_id || c.projectUuid;
+          return pid === firstProjId;
+        });
+        if (allSameProject) {
+          projectTag = `-${sanitizeFilename(projectsMap[firstProjId])}`;
+        }
+      }
+    }
+
+    a.download = `${prefix}${projectTag}-${datetime}.zip`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
     
     progressModal.style.display = 'none';
 
@@ -1126,7 +1280,9 @@ function setupEventListeners() {
         orgDisplay.textContent = orgId.substring(0, 8) + '...';
         orgDisplay.title = orgId;
       } else {
-        orgDisplay.textContent = 'Not set';
+        // No stored org ID — auto-detect will run on the next export action.
+        orgDisplay.textContent = '[Auto]';
+        orgDisplay.title = 'No manual org ID set; auto-detection runs on each export.';
       }
       // Update theme label
       const theme = document.documentElement.getAttribute('data-theme') || 'dark';
@@ -1277,6 +1433,14 @@ function setupEventListeners() {
 
   // Set initial selected state
   document.querySelector('.filter-option[data-value="all"]').classList.add('selected');
+
+  // Project filter
+  const projectFilter = document.getElementById('projectFilter');
+  if (projectFilter) {
+    projectFilter.addEventListener('change', () => {
+      applyFiltersAndSort();
+    });
+  }
 
   // Export all button
   document.getElementById('exportAllBtn').addEventListener('click', exportAllFiltered);

@@ -1,9 +1,54 @@
 # Changelog
 
+## [1.10.25]
+
+- Browse page: added "Projects" checkbox in export settings. When enabled, bulk and selected ZIP exports organize conversations into subfolders named after their Claude project (with a `No Project` folder for standalone chats). Works seamlessly with both flat and nested artifact export modes.
+- Browse page: added a dedicated Project filter dropdown populated dynamically with all loaded projects (plus "All Projects" and "No Project"). Selecting a project filters the table to all conversations under that project.
+- Browse page: project names in the table are now clickable links that instantly filter the view to that project.
+- Bulk export ZIP files now tag the project name in the downloaded archive filename when exporting a single project (e.g. `claude-exports-<ProjectName>-<datetime>.zip`).
+
+## [1.10.24]
+
+- Model snapshot records now store `conversationCreatedAt` and `conversationUpdatedAt` (from the API's `created_at` / `updated_at`), refreshed whenever the conversation list loads; existing records are backfilled on the next load. Backup exports list these two fields first in each record. Older backups still import unchanged, and new backups import into older versions (the extra fields are ignored).
+- Release workflow now refuses version tags that aren't on `main`, so a tag pushed from `testing` can't reach the stores. Dev tooling only; no extension code changed.
+
+## [1.10.23]
+
+- Browse page: Fable models get their own badge color (blue, the color they already showed in). Models from families without a dedicated color now show in crimson (`#a81f3d` light / `#f0708a` dark) instead of blue.
+
+## [1.10.22]
+
+- Fixed model names for newer families (e.g. Fable) showing as raw IDs like `claude-fable-5` on the browse page; they now display as "Claude Fable 5". The formatter now matches any family name by ID shape instead of a fixed sonnet/opus/haiku list, so future families format correctly without an update.
+
+## [1.10.21]
+
+- Fixed bulk ZIP exports silently dropping conversations that share a title (e.g. several "New chat"s). `zip.file()` replaces same-named entries, so only the last one survived; in nested-artifact mode, same-titled conversations were merged into one folder and their artifacts could overwrite each other. Duplicates are now suffixed `" (2)"`, `" (3)"`, … via new `uniqueFilename()` (case-insensitive, since Windows/macOS filesystems are). Applies to popup Export All and browse-page Export Selected/All.
+- Fixed browse-page bulk export failing on untitled conversations (`conv.name.replace` threw on a null name; empty names produced a bare `.md`). New `sanitizeFilename()` also strips control characters/newlines, trailing dots/spaces, and caps length at 150; falls back to `"Untitled"`.
+- Single-conversation ZIPs (artifact extraction) now sanitize the title too — a chat named `A/B testing` used to put its file in an `A/` subfolder inside the ZIP.
+- Blob download URLs are now revoked after a delay instead of synchronously after `a.click()`, which can cancel the download in Firefox.
+- Added `sanitizeFilename` / `uniqueFilename` unit tests.
+- Same fixes shipped in DeepSeek Exporter v1.4.2 (shared bugs from the port).
+- Releases are now built by GitHub Actions: pushing a `vX.Y.Z` tag runs checks + tests, builds both zips as `claude-exporter-<browser>_vX.Y.Z.zip` (" Beta" stripped; earlier releases used unversioned names), and creates the GitHub release with notes from this CHANGELOG. A checks workflow runs on every push to `testing` (manifest versions, Chrome/Firefox parity, JS syntax, vitest, `web-ext lint`, test build). Dev tooling only; no extension code changed.
+- Releases now submit to the stores automatically: pushing a `vX.Y.Z` tag builds both zips, submits them to the Chrome Web Store (API v2, authenticated through Workload Identity Federation with no stored key) and Firefox Add-ons (`web-ext sign`) in parallel, and creates the GitHub release only once both submissions succeed. Store credentials live in a `stores` GitHub environment limited to version tags.
+
+## [1.10.20]
+
+- Options page: wired up the donate links in the Contact & Diagnostics section — "Buy me a coffee" → [buymeacoffee.com/agoramachina](https://buymeacoffee.com/agoramachina), "Patreon" → [patreon.com/c/agoramachina](https://www.patreon.com/c/agoramachina). Both open in a new tab with `rel="noopener noreferrer"`.
+
+## [1.10.19]
+
+- Browse settings dropdown: org ID display now reads `[Auto]` when no manual org ID is stored (was the misleading `"Not set"`, which suggested action was required). Tooltip on hover explains: "No manual org ID set; auto-detection runs on each export." HTML default updated to match.
+
+## [1.10.18]
+
+- Browse table: bumped `body { min-width }` from 1140px to 1200px and added matching `min-width: 1200px` to `.container`. Without the container min-width, its `20px` horizontal padding was eating into the body's floor and clipping the table's rightmost columns (Actions + Checkbox) at narrow viewports. With both at 1200px there's 1160px of usable content area inside the container — enough for the full table. The page scrolls horizontally below 1200px; the table never shrinks or clips.
+
 ## [1.10.17]
 
 - Import Backup now asks merge-vs-replace **before** opening the file picker (was after). Click Import Backup → modal asks "Merge with current data" or "Replace all current data" + "Choose File…" → file picker opens → import runs with the chosen mode. Lets you back out before navigating filesystem, and removes the awkward two-step confirmation. The modal no longer shows file contents (snapshot/export counts, creation date), since the file isn't selected yet — file validation still happens after selection.
 - `importBackup(file, onComplete)` → `importBackup(file, mode, onComplete)`; the modal helper is now `showImportModeModal(onConfirm)` and lives at the caller layer (options.js / browse.js) rather than inside `importBackup`.
+
+_Published_
 
 ## [1.10.16]
 
